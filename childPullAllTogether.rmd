@@ -1,0 +1,33 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+
+```{r}
+# iretcalc has pension info from the ppd
+glimpse(iretcalc)
+returns.syn <- iretcalc %>% select(fyear, cash.ir, bonds.ir, equity.ir, allother.ir, totret.ir)
+ht(returns.syn)
+
+
+
+tmp1 <- bind_rows(select(tax, fyear=year, variable, rvalue) %>% filter(variable=="tottax"),
+                  select(rgdp, fyear=year, variable, rvalue=rvalue.fy)) %>% group_by(variable) %>%
+  arrange(fyear) %>%
+  mutate(value=rvalue / lag(rvalue) * 100 - 100)
+
+tmp2 <- iretcalc %>% select(fyear, value=totret.ir) %>% mutate(value=value*100, variable="totreturn")
+title <- "pchya real SG taxes and real GDP, along with estimated nominal pension returns"
+bind_rows(tmp1, tmp2) %>% filter(fyear>=1975) %>% 
+  qplot(fyear, value, data=., colour=variable, geom=c("point", "line"), main=title) + geom_hline(y=0)
+
+
+
+```
+
+

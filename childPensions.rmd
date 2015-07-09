@@ -1,0 +1,250 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+
+# Pensions analysis
+
+```{r}
+# create a df with var names, for easy reference
+vardf <- z1 %>% count(variable, snamex, description) # I have dropped description
+# anyDuplicated(select(vardf, variable)) # make sure there are no dups
+filter(vardf, grepl("FL222050043", variable))
+tmp <- filter(vardf, grepl("repurchase", description, ignore.case=TRUE))
+tmp$description
+
+# directly held real estate:  FL225035043 for SLGs, FL575035005 for privates
+
+# Define the variables we may want
+# add short varnames for selected vars
+# DON'T PUT SPACE AFTER THE COMMA!!! 
+vnames.vec <- "snamex,shortname
+
+# general variables
+FA206210001, other.slgperscurtax
+FA206240001, other.slgprodimptax
+FA086902005, other.gdp
+FL213162005, other.munisec
+FL213162400, other.stdebt
+FL214090005, other.slgfinass
+FL214190005, other.slgfinliab
+FL653064100, other.mfcorpequity
+FL654090005, other.mfassets
+
+# private DB pension funds
+FL574090045, ppfdb.finassets
+FL573065043, ppfdb.mortgages
+FL573064143, ppfdb.corpequity
+FL573064243, ppfdb.mfshares
+FL573073005, ppfdb.claims
+FL573093043, ppfdb.otherassets
+FL574190043, ppfdb.entitlement
+FL575035005, ppfdb.redirect
+
+# SLG DB funds
+FL224090045, slgdb.finassets
+FL223065043, slgdb.mortgages
+FL223064145, slgdb.corpequity
+FL223064243, slgdb.mfshares
+FL223073045, slgdb.claims
+FL223093043, slgdb.otherassets
+FL224190043, slgdb.entitlement
+FL225035043, slgdb.redirect
+# I add some variables so we have more info on asset allocation
+FL223020043, slgdb.cashchecking
+FL223030045, slgdb.cashsavings
+FL223034043, slgdb.cashmoney
+# FL222050043, slgdb.cashrepo this didnt work for some reason
+FL224004045, slgdb.bonds
+"
+
+# cash FL223020043 + FL223030045 + FL223034043 + FL222050043
+# bonds FL224004045 for now -- but includes both corporates and treasuries
+# equity - use my equity2 below
+# other - redirect + otherassets
+
+# Table L.118.b info
+# 1 FL224090045 Total financial assets (1) 4302.2 4493.4 4637.3 4721.7 1
+# 2 FL223020043 Checkable deposits and currency 4.1 4.3 4.2 5.0 2
+# 3 FL223030045 Time and savings deposits 34.6 37.4 37.1 44.8 3
+# 4 FL223034043 Money market fund shares 43.5 42.2 39.1 47.2 4
+# 5 FL222050043 Security repurchase agreements 3.4 3.4 3.3 3.9 5
+# 6 FL224004045 Credit market instruments 761.6 774.1 780.6 845.3 6
+# 7 FL223069143 Open market paper 38.0 40.3 39.6 47.9 7
+# 8 FL223061143 Treasury securities 159.3 168.5 187.3 203.4 8
+# 9 FL223061743 Agency- and GSE-backed securities 159.8 172.9 194.3 207.9 9
+# 10 FL223062043 Municipal securities 2.1 1.4 0.5 0.4 10
+# 11 FL223063045 Corporate and foreign bonds 390.6 379.0 347.7 377.2 11
+# 12 FL223065043 Mortgages 11.9 11.9 11.2 8.6 12
+# 13 FL223064145 Corporate equities 1793.6 1728.8 1926.9 2309.4 13
+# 14 FL223064243 Mutual fund shares 217.0 152.2 121.6 146.4 14
+# 15 FL223090045 Miscellaneous assets 1444.4 1751.1 1724.5 1319.6 15
+# 16 FL223073045 Claims of pension fund on sponsor (2) 1343.4 1648.3 1622.2 1204.1 16
+# 17 FL223093043 Other 101.0 102.7 102.2 115.5 17
+# 18 FL224190043 Pension entitlements (liabilities) (3) 4408.7 4604.1 4762.4 4862.9 18
+
+
+
+vnames <- read_csv(vnames.vec) %>% mutate_each(funs(str_trim)) %>% filter(!is.na(shortname), !grepl("#", snamex))
+# vnames
+# anyDuplicated(vnames)
+
+usevars <- vardf %>% mutate(shortname=vnames$shortname[match(snamex, vnames$snamex)]) %>% filter(!is.na(shortname))
+
+# ht(usevars)
+# ht(z1)
+
+# create a pensions wide file and analyze
+df1 <- z1 %>% filter(snamex %in% unique(usevars$snamex)) %>%
+  mutate(shortname=usevars$shortname[match(variable, usevars$variable)]) %>%
+  separate(shortname, c("slgppf", "vname"), sep="\\.", extra="merge", remove=TRUE) %>%
+  select(slgppf, vname, year, value)
+
+dfothr <- filter(df1, slgppf=="other") %>%
+  spread(vname, value) %>%
+  mutate(mfstockshare=mfcorpequity / mfassets * 100) # economywide share of mutual fund assets that are in corp equities
+
+dfret <- df1 %>% filter(slgppf!="other") %>%
+  spread(vname, value, fill=0) %>%
+  left_join(select(dfothr, -slgppf)) %>%
+  mutate(invassets=entitlement - claims,
+         fr.mv=invassets / entitlement * 100,
+         cash=cashchecking + cashsavings + cashmoney, #  + cashrepo did not work!
+         allother=redirect + otherassets,
+         totbonds=bonds +  mfshares * (1 - mfstockshare / 100),
+         equity1=corpequity + mortgages + (mfshares+otherassets) * mfstockshare / 100, # +otherassets
+         equity2=corpequity + mfshares * mfstockshare / 100,
+         equity3=corpequity + (mfshares+otherassets) * mfstockshare / 100 + redirect, # +otherassets+directly owned real estate
+         equityshare1=equity1 / invassets * 100,
+         equityshare2=equity2 / invassets * 100,
+         equityshare3=equity3 / invassets * 100,
+         equitygdpshare=equity1/gdp *100,
+         check=cash + totbonds + equity2 + allother,
+         diff=invassets - check)
+
+```
+
+
+## Investment returns
+Notes:  
+* These returns look better than I thought pension funds had done...
+
+### From the PPD
+```{r}
+ppd %>% group_by(fy) %>%
+  do(qtiledf(.$InvestmentReturn_1yr)) %>%
+  kable(caption="1-year investment return", digits=3)
+
+ppd %>% group_by(fy) %>%
+  do(qtiledf(.$InvestmentReturn_2yr)) %>%
+  kable(caption="2-year investment return", digits=3)
+
+```
+
+
+## Market assets of pension funds
+### From the PPD - note that this is plan FY end data
+* This is more consistent with how I think the funds did...and it includes some positive inflows??
+
+```{r}
+ppd %>% group_by(ppd_id, PlanName) %>%
+  mutate(mvapch=MktAssets_net / MktAssets_net[match(fy-1, fy)] * 100 - 100) %>%
+  select(ppd_id, PlanName, fy, MktAssets_net, mvapch) %>%
+  group_by(fy) %>%
+  do(qtiledf(.$mvapch)) %>%
+  kable(caption="% change in MV of assets (implicitly reflects contribution & benefit changes)")
+
+
+```
+
+
+### From the FOF - note that this is CY end data, which would give different results from plan fy end data
+```{r}
+dfret %>% filter(slgppf=="slgdb") %>%
+  mutate(invassetspch=invassets / invassets[match(year-1, year)] * 100 - 100) %>%
+  select(year, invassets, invassetspch) %>%
+  filter(year>=1990) %>%
+  kable(caption="% change in slg db pension fund investible assets (implicitly reflects contribution & benefit changes)")
+
+```
+
+
+## Asset allocations of pension funds
+### From the ppd
+#### Each asset class individually
+```{r}
+aapctvars <- c("equities_tot", "equities_domestic", "equities_international", 
+               "FixedIncome_tot", "FixedIncome_domestic", "FixedIncome_international", 
+               "RealEstate", "CashAndShortTerm", "alternatives", "other")
+
+# create ppd long file
+ppdl <- ppd %>% select(ppd_id, PlanName, fy, one_of(aapctvars)) %>%
+  gather(variable, value, -ppd_id, -PlanName, -fy)
+
+
+for(var in aapctvars) {
+  ppdl %>% filter(ppd_id, variable==var) %>%
+    group_by(fy, variable) %>%
+    do(qtiledf(.$value)) %>%
+    print(kable(paste0("Asset allocation: ", var), digits=3))
+}
+
+```
+
+#### Summary allocation to major asset classes by year
+```{r}
+aapctvars2 <- c("equities_tot", "FixedIncome_tot", "RealEstate", "CashAndShortTerm", "alternatives", "other")
+
+top10 <- ppd %>% filter(fy==2013) %>% select(ppd_id, PlanName, MktAssets_net) %>% arrange(-MktAssets_net) %>% filter(row_number()<=10)
+
+ppd %>% filter(ppd_id %in% top10$ppd_id) %>%
+  select(ppd_id, PlanName, fy, one_of(aapctvars2)) %>%
+  mutate(checksum=rowSums(.[, aapctvars2], na.rm=TRUE)) %>%
+  arrange(ppd_id, fy) %>%
+  kable(caption="Asset allocation for 10 largest plans based on 2013 assets", digits=4)
+
+ppd %>% select(ppd_id, PlanName, fy, one_of(aapctvars2)) %>%
+  group_by(fy) %>%
+  summarise_each(funs(median(., na.rm=TRUE)), -ppd_id, -PlanName, -fy) %>%
+  kable(caption="Median asset allocation for all plans (caution: need not add)", digits=4)
+
+eqpct <- c("equities_tot", "equities_domestic", "equities_international")
+ppd %>% select(ppd_id, PlanName, fy, one_of(eqpct)) %>%
+  group_by(fy) %>%
+  summarise_each(funs(median(., na.rm=TRUE)), -ppd_id, -PlanName, -fy) %>%
+  mutate(domesticshare=equities_domestic / equities_tot) %>%
+  kable(caption="Median equity allocation for all plans (caution: need not add)", digits=4)
+
+fixedpct <- c("FixedIncome_tot", "FixedIncome_domestic", "FixedIncome_international")
+ppd %>% select(ppd_id, PlanName, fy, one_of(fixedpct)) %>%
+  group_by(fy) %>%
+  summarise_each(funs(median(., na.rm=TRUE)), -ppd_id, -PlanName, -fy) %>%
+  mutate(domesticshare=FixedIncome_domestic / FixedIncome_tot) %>%
+  kable(caption="Median fixed income allocation for all plans (caution: need not add)", digits=4)
+
+fixedpct <- c("FixedIncome_tot", "FixedIncome_domestic", "FixedIncome_international")
+ppd %>% select(ppd_id, PlanName, fy, one_of(fixedpct)) %>%
+  group_by(fy) %>%
+  summarise_each(funs(p75), -ppd_id, -PlanName, -fy) %>%
+  mutate(domesticshare=FixedIncome_domestic / FixedIncome_tot) %>%
+  kable(caption="75th percentile fixed income allocation for all plans (caution: need not add)", digits=4)
+
+
+```
+
+
+### From the FOF
+```{r}
+dfret %>% select(year, equityshare1) %>%
+  filter(year>=1990) %>%
+  kable(caption="equity defined as: corpequity + mortgages + (mfshares+otherassets) * mfstockshare")
+  
+  
+```
+
+

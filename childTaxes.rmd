@@ -1,0 +1,56 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+
+
+```{r checkdata.tax, eval=FALSE}
+data(package="bdata")
+glimpse(sgtax.a)
+count(sgtax.a, vname, variable, ic)
+?FRED
+
+
+```
+
+# Tax analysis
+* Note that this is state govt taxes only; may need to come back and think about local, but not yet  
+
+
+## Start by looking at the raw tax data, adjusted for inflation, for picture of what happened in/after last 2 recessions    
+
+```{r data.tax}
+
+# any missing years?
+# tax %>% group_by(variable) %>% arrange(year) %>% mutate(dy=year-lag(year)) %>% count(dy)
+
+bind_rows(tax, select(rgdp, year, variable, rvalue=rvalue.fy)) %>% group_by(variable) %>%
+  arrange(year) %>%
+  mutate(rpch=rvalue / lag(rvalue) * 100 - 100) %>% # this relies on faith that there are no missing years
+  qplot(year, rpch, data=., colour=variable, geom=c("point", "line"), main="% change in inflation-adjusted SG tax and real GDP") + geom_hline(y=0)
+
+tax %>% select(year, variable, rvalue) %>%
+  group_by(year) %>%
+  mutate(pct=rvalue / rvalue[variable=="tottax"] * 100) %>%
+  filter(variable!="tottax") %>%
+  qplot(year, pct, data=., colour=variable, geom=c("point", "line"), main="Shares of total state govt taxes") +
+  geom_hline(y=33.3)
+
+tax %>% select(year, variable, rvalue) %>%
+  group_by(year) %>%
+  mutate(pct=rvalue / rvalue[variable=="tottax"] * 100) %>%
+  filter(variable!="tottax", year>=1990) %>%
+  qplot(year, pct, data=., colour=variable, geom=c("point", "line"), main="Shares of total state govt taxes, 1990+") +
+  geom_hline(y=33.3)
+
+
+```
+
+
+
+

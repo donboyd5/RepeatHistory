@@ -1,0 +1,49 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+# Other taxes
+
+## Trends in other taxes (corp income tax, motor fuel tax, cigarette tax, estate tax, various smaller taxes)
+
+```{r}
+bind_rows(filter(tax, variable=="other"), select(rgdp, year, variable, rvalue=rvalue.fy)) %>% 
+  filter(year>=1970) %>%
+  group_by(variable) %>%
+  arrange(year) %>%
+  mutate(rpch=rvalue / lag(rvalue) * 100 - 100) %>% # this relies on faith that there are no missing years
+  qplot(year, rpch, data=., colour=variable, geom=c("point", "line"), 
+        main="% change in inflation-adjusted SG other taxes and real GDP, state FY basis") +
+  geom_hline(y=0)
+
+```
+
+## Construct other "tax base" - simply base on gdp growth
+```{r}
+df <- bind_rows(filter(tax, variable=="other"), select(rgdp, year, variable, rvalue=rvalue.fy)) %>% 
+  filter(year>=1970) %>%
+  group_by(variable) %>%
+  arrange(year) %>%
+  mutate(rpch=rvalue / lag(rvalue) * 100 - 100) %>%
+  select(variable, year, rpch) %>%
+  spread(variable, rpch)
+
+summary(df.out <- lm(other ~ rgdp.a, data=df))
+
+df$fit <- NA; df$fit[2:nrow(df)] <- df.out$fitted.values
+
+df %>% gather(variable, value, -year) %>%
+  filter(variable!="rgdp2") %>%
+  qplot(year, value, data=., colour=variable, geom=c("point", "line")) + geom_hline(y=0)
+
+othertaxbase <- df %>% rename(otherbase=fit)
+
+
+```
+
+

@@ -1,0 +1,93 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+# Sales tax base analysis
+## Basic estimate
+```{r, eval=TRUE}
+# try to construct a sales tax base using NIPA consumption accounts
+# we want NIPA Table 2.4.5, nominal, so that we can adjust using same price index as for taxes
+# I have downloaded it to the data directory
+
+condat <- read_excel("./Data/NIPATable2.4.5.xls")
+colnames <- c("lineno", "vdesc", paste0("y", 1929:2013))
+ncol(condat) - length(colnames) # should be zero
+names(condat) <- colnames
+condat2 <- condat %>% mutate(lineno=cton(lineno)) %>%
+  filter(!is.na(lineno))
+vardf <- count(condat2, lineno, vdesc) # too wide to look at on screen, use viewer
+
+# create names for selected line numbers that we will need for calc of sales tax base
+# for services, only include those I think are likely to be taxed
+vnames.s <- "lineno,vname
+1, pce
+3, durgoods
+25, nondurgoods
+28, ndg.opc.alc
+30, ndg.clothing
+36, ndg.gasenergy
+39, ndg.other
+40, ndg.ondg.medical
+46, ndg.ondg.abroad
+47, services
+57, svc.elecgas
+69, svc.mv
+76, svc.recreation
+81, svc.foodhotel
+97, svc.other.telecom
+107, svc.hhmaint
+"
+vnames <- read_csv(vnames.s)
+names(vnames) <- str_trim(names(vnames)) # in case any spaces crept in
+vnames %<>% mutate_each(funs(str_trim)) %>% mutate(lineno=cton(lineno)) %>%
+  filter(!is.na(lineno))
+# vnames
+
+# get the desired subset of consumption data
+cons <- condat2 %>% mutate(vname=vnames$vname[match(lineno, vnames$lineno)]) %>%
+  filter(!is.na(vname)) %>%
+  select(-vdesc) %>%
+  gather(year, value, -lineno, -vname) %>%
+  mutate(year=cton(str_extract(year, "[0-9]+")),
+         value=cton(value)) %>%
+  select(-lineno) %>%
+  spread(vname, value, fill=0) %>%
+  mutate(txblndg=ndg.opc.alc + ndg.clothing + ndg.gasenergy +(ndg.other - ndg.ondg.medical - ndg.ondg.abroad),
+         txblsvc=svc.elecgas + svc.mv + svc.recreation + svc.foodhotel + svc.other.telecom + svc.hhmaint,
+         salestaxbase=durgoods + txblndg + txblsvc) %>%
+  mutate(txblshare=salestaxbase / pce * 100)
+# look at raw data since 1950 to make sure zeros (missing data) didn't show up and explain the trend
+# cons %>% filter(year>=1955) # nope, not an issue
+  
+qplot(year, txblshare, data=cons, geom=c("point", "line"), main="Estimated sales tax base as % of PCE")
+
+```
+
+
+## Estimated sales tax base, broader economy, and sales tax revenue, adjusted for inflation, FY basis
+```{r}
+# adjust with gdp price index, not a consumption price index
+cons2 <- cons %>% select(year, pce, salestaxbase) %>% gather(variable, value, -year) %>%
+  arrange(year) %>%
+  mutate(rvalue=value * gdppi$value[match(2014, gdppi$year)] / gdppi$value[match(year, gdppi$year)]) %>%
+  mutate(rvalue=(rvalue + lag(rvalue)) / 2) # put on approximate state fy basis
+
+# gst is general sales tax
+bind_rows(filter(tax, variable=="gst"), select(rgdp, year, variable, rvalue=rvalue.fy), cons2) %>% 
+  filter(year>=1970) %>%
+  group_by(variable) %>%
+  arrange(year) %>%
+  mutate(rpch=rvalue / lag(rvalue) * 100 - 100) %>% # this relies on faith that there are no missing years
+  qplot(year, rpch, data=., colour=variable, geom=c("point", "line"), 
+        main="% change in inflation-adjusted SG general sales tax, real estimated sales tax base, and real GDP, state FY basis") +
+  geom_hline(y=0)
+
+
+```
+
+

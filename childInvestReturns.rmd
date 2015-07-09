@@ -1,0 +1,269 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+
+
+# Develop a longer series of investment returns by asset class consistent with history
+
+```{r}
+# Construct asset allocations and asset returns for June 30 FY end
+# tbill - Aswath Damodoran simply used 12 month average
+# put everything into proportions rather than percents
+tbill <- FRED("TB3MS") %>% # monthly
+  mutate(fyear=ifelse(month(date)<=6, year, year+1)) %>%
+  group_by(fyear) %>%
+  summarise(value=mean(value, na.rm=TRUE) / 100)
+qplot(fyear, value, data=tbill, geom=c("point", "line"))
+
+# tbond10 - AD calc'd total return from end-of-year values
+# "I add two components - the promised coupon at the start of the year and the price change due to interest rate changes."
+# add current yield plus implied change in price from prior year
+# here is his formula =((B50*(1-(1+B51)^(-10)) / B51+1/(1+B51)^10)-1)+B50
+# I checked my results on a calendar year basis and they are very close to his, but not identical; it is possible he used
+# month average rather than month end
+
+getpricechange <- function(promisedcoupon.boy, coupon.eoy){
+  pchange <- (promisedcoupon.boy * (1-(1+coupon.eoy)^(-10)) /
+                coupon.eoy + 1/(1+coupon.eoy)^10) - 1
+  return(pchange)
+}
+# getpricechange(.0402, .0221) + .0402 gives 0.2010128, which is same as he had for these value, in 2008
+
+tbond10 <- FRED("DGS10") %>% # daily
+  filter(month(date)==6) %>%  # June is last month of typical state fiscal year
+  group_by(year) %>%
+  filter(date==max(date)) %>%
+  ungroup %>% # needed to calc total return
+  arrange(year) %>%
+  mutate(fyear=year, # June is always in the same fy
+         value=value / 100, 
+         coupon.eoy=value,
+         promisedcoupon.boy=lag(coupon.eoy),
+         pricechange=getpricechange(promisedcoupon.boy, coupon.eoy),
+         value=promisedcoupon.boy + pricechange)
+qplot(fyear, value, data=tbond10, geom=c("point", "line"))
+
+# SP 500 it is harder to replicate the method here.
+# Damodoran calculated SP500 return as:
+#   numerator - the sum of:
+#     n1: change in year-end split-and-dividend-adjusted price from prior year-end, plus
+#     n2: dividends paid in the year
+#   denominator:  prior year-end split-and-dividend-adjusted price
+# He does not give his sources in detail.
+# Here is the Excel formula
+#   =('S&P 500 & Raw Data'!B76-'S&P 500 & Raw Data'!B75+'S&P 500 & Raw Data'!C76)/'S&P 500 & Raw Data'!B75
+# year-end adjusted prices are readily available from Yahoo Finance and several other sources
+# dividends are harder to find
+# https://www.quandl.com/data/MULTPL/SP500_DIV_YIELD_MONTH-S-P-500-Dividend-Yield-by-Month
+# https://www.quandl.com/data/MULTPL/SP500_DIV_MONTH-S-P-500-Dividend-by-Month
+# devtools::install_github("quandl/R-package")
+library(Quandl)
+Quandl.auth("iAyPZXGstKtC19fEWMvd")
+
+# df1 <- Quandl(c("MULTPL/SP500_DIV_MONTH"))
+# df2 <- Quandl(c("MULTPL/SP500_REAL_PRICE_MONTH"))
+
+
+spdivpct <- Quandl(c("MULTPL/SP500_DIV_YIELD_MONTH"))
+names(spdivpct) <- c("date", "divpct")
+
+# now get sp500 adjusted closes
+sp500 <- Quandl(c("YAHOO/INDEX_GSPC"))
+names(sp500)
+names(sp500) <- c("date", "sp500.open", "sp500.high", "sp500.low", "sp500.close", "sp500.vol", "sp500.adjclose")
+
+# Now construct a measure like Aswath's
+# get month end for each, and merge on month
+spdivpcta <- spdivpct %>% mutate(year=year(date), month=month(date)) %>%
+  group_by(year, month) %>%
+  arrange(date) %>%
+  filter(row_number()==max(row_number())) %>%
+  mutate(divpct=divpct/100) %>%
+  select(year, month, divpct)
+
+sp500a <- sp500 %>% select(date, sp500.adjclose) %>%
+  mutate(year=year(date), month=month(date)) %>%
+  group_by(year, month) %>%
+  arrange(date) %>%
+  filter(row_number()==max(row_number())) %>%
+  ungroup %>%
+  mutate(priorclose=lag(sp500.adjclose)) %>%
+  select(year, month, sp500.adjclose, priorclose)
+  
+month.fye <- 6 # month in which the fy ends
+month.fyb <- 7
+sp500.all <- inner_join(sp500a, spdivpcta) %>%
+  mutate(div=priorclose * divpct / 12,
+         fyear=ifelse(month>month.fye, year+1, year)) %>%
+  group_by(fyear) %>%
+  summarise(sp500.adjclose=sp500.adjclose[match(month.fye, month)],
+         priorclose=priorclose[match(month.fyb, month)],
+         div=sum(div)) %>%
+  mutate(divyield=div / priorclose,
+         earnyield=(sp500.adjclose - priorclose) / priorclose,
+         totsp500.ir=(1+divyield) * (1+earnyield) - 1)
+# I have not had a chance to compare closely, but when done on a cy basis, totsp500.ir looks very close to Aswath's
+
+qplot(fyear, totsp500.ir, data=sp500.all, geom=c("point", "line")) + geom_hline(y=0)
+  
+# month.fye <- 12 # month in which the fy ends
+# month.fyb <- 1
+# sp500.all <- inner_join(sp500a, spdivpcta) %>%
+#   mutate(div=priorclose * divpct / 12,
+#          fyear=ifelse(month>month.fye, year+1, year)) %>%
+#   group_by(fyear) %>%
+#   summarise(sp500.adjclose=sp500.adjclose[match(month.fye, month)],
+#          priorclose=priorclose[match(month.fyb, month)],
+#          div=sum(div)) %>%
+#   mutate(divyield=div / priorclose,
+#          earnyield=(sp500.adjclose - priorclose) / priorclose,
+#          totsp500.ir=(1+divyield) * (1+earnyield) - 1)
+# # I have not had a chance to compare closely, but when done on a cy basis, totsp500.ir looks very close to Aswath's
+# 
+# qplot(fyear, totsp500.ir, data=sp500.all, geom=c("point", "line")) + geom_hline(y=0)
+  
+
+# combine returns
+glimpse(tbill)
+glimpse(tbond10)
+glimpse(sp500.all)
+newrets <- left_join(rename(tbill, tbill.ir=value), select(tbond10, fyear, tbond.ir=value)) %>%
+  left_join(select(sp500.all, fyear, totsp500.ir)) %>%
+  filter(!is.na(tbill.ir*tbond.ir*totsp500.ir))
+newrets %>% gather(variable, value, -fyear) %>% qplot(fyear, value, data=., colour=variable, geom=c("point", "line")) + geom_hline(y=0)
+
+
+# now apply asset allocations from the middle of the year, which is cy end for the typical june 30 fy
+ashares <- dfret %>% filter(slgppf=="slgdb") %>%
+  select(year, cash, totbonds, equity=equity2, allother, invassets) %>%
+  mutate_each(funs(share=./invassets), -year, -invassets) %>%
+  mutate(unk=1 - cash - totbonds - equity - allother) %>%
+  select(-invassets)
+ashares %>% kable(digits=3)
+
+ashares %>% select(-unk) %>% gather(variable, value, -year) %>%
+  qplot(year, value, data=., geom=c("point", "line"), colour=variable, main="Estimated PPF allocations from FRB FOF")
+
+iretcalc <- inner_join(newrets, mutate(ashares, fyear=year+1)) %>%
+  mutate(equity.ir=totsp500.ir*equity, 
+         bonds.ir=tbond.ir*totbonds,
+         cash.ir=tbill.ir*cash,
+         allother.ir=((tbond.ir+totsp500.ir)/2) * allother,
+         totret.ir=equity.ir + bonds.ir + cash.ir + allother.ir) %>%
+  # now get fiscal year estimate
+  arrange(fyear)
+
+qplot(fyear, totret.ir, data=iretcalc, geom=c("point", "line"), 
+      main="Estimated PPF tot returns based on returns and allocations by class") + geom_hline(y=0)
+
+iretcalc %>% gather(variable, value, -fyear) %>%
+  filter(variable %in% c("totsp500.ir", "tbond.ir", "tbill.ir", "totret.ir"), fyear>=1997) %>%
+  qplot(fyear, value, data=., colour=variable, geom=c("point", "line"), 
+      main="Estimated PPF tot returns and returns by class") + geom_hline(y=0)
+
+# Compare to observed (reported) returns -- weighting by asset size doesn't make much difference
+ppdret <- ppd %>% group_by(fy) %>%
+  filter(!is.na(InvestmentReturn_1yr), !is.na(MktAssets_net)) %>%
+  summarise(ppf.ir=median(InvestmentReturn_1yr, na.rm=TRUE), 
+            ppfw.ir=sum(MktAssets_net * InvestmentReturn_1yr) / sum(MktAssets_net)) %>%
+  select(fy, ppf.ir, ppfw.ir)
+
+iret2 <- left_join(select(iretcalc, fyear, totret.ir), rename(ppdret, fyear=fy)) %>%
+  gather(variable, value, -fyear)
+
+qplot(fyear, value, data=filter(iret2, fyear>=1990), colour=variable, geom=c("point", "line"), 
+      main="Median reported PPD return (ppf.ir) and synthetic estimate of public pension fund returns (totret.ir)") +
+  geom_hline(y=0)
+
+
+
+```
+
+
+
+```{r, eval=FALSE}
+# get annual asset returns from Aswath Damodaran - see http://people.stern.nyu.edu/adamodar/New_Home_Page/datafile/histretSP.html
+# data at: http://www.stern.nyu.edu/~adamodar/pc/datasets/histretSP.xls
+# the _djb version is just so that I can look carefully without modifying the original; read from the original
+# NOTES: 
+# sp500 yield includes dividends (good)
+# tbill is FRED TB3MS, monthly; annual number is average of first month of each quarter over 4 qtrs
+# tbond based on FRED 10-year, year-end, rate -- sum of rate, plus implied change in price. As he puts it:
+#    To compute the return on a constant maturity bond, I add two components - the promised coupon at the start of the year
+#    and the price change due to interest rate changes.
+# 
+# rets <- read_excel("./Data/histretSP.xls", sheet="Returns by year", skip=17)
+# glimpse(rets) # good, all numeric
+# ht(rets)
+# first4 <- c("year", "sp500", "tbill3", "tbond10")
+# names(rets)[1:4] <- first4
+# rets2 <- rets[, first4] %>% filter(!is.na(year))
+# rets2 %>% ht
+# 
+# # now get asset allocations and construct synthetic returns, and compare to actual returns
+# ashares <- dfret %>% filter(slgppf=="slgdb") %>%
+#   select(year, cash, totbonds, equity=equity2, allother, invassets) %>%
+#   mutate_each(funs(share=./invassets), -year, -invassets) %>%
+#   mutate(unk=1 - cash - totbonds - equity - allother) %>%
+#   select(-invassets)
+# ashares %>% kable(digits=3)
+# 
+# ashares %>% select(-unk) %>% gather(variable, value, -year) %>%
+#   qplot(year, value, data=., geom=c("point", "line"), colour=variable, main="Estimated PPF allocations from FRB FOF")
+# 
+# iretcalc <- inner_join(rets2, ashares) %>%
+#   mutate(equity.ir=sp500*equity, 
+#          bonds.ir=tbond10*totbonds,
+#          cash.ir=tbill3*cash,
+#          allother.ir=((tbond10+sp500)/2) * allother,
+#          totret.ir=equity.ir + bonds.ir + cash.ir + allother.ir) %>%
+#   # now get fiscal year estimate
+#   arrange(year) %>%
+#   mutate(totretfy.ir=(totret.ir + lag(totret.ir)) / 2)
+# 
+# qplot(year, totretfy.ir, data=iretcalc, geom=c("point", "line"), 
+#       main="Estimated PPF tot returns based on returns and allocations by class") + geom_hline(y=0)
+# 
+# iretcalc %>% gather(variable, value, -year) %>%
+#   filter(variable %in% c("sp500", "tbond10", "tbill3", "totret.ir"), year>=1997) %>%
+#   qplot(year, value, data=., colour=variable, geom=c("point", "line"), 
+#       main="Estimated PPF tot returns and returns by class") + geom_hline(y=0)
+# 
+# # Compare to observed (reported) returns -- weighting by asset size doesn't make much difference
+# ppdret <- ppd %>% group_by(fy) %>%
+#   filter(!is.na(InvestmentReturn_1yr), !is.na(MktAssets_net)) %>%
+#   summarise(ppf.ir=median(InvestmentReturn_1yr, na.rm=TRUE), 
+#             ppfw.ir=sum(MktAssets_net * InvestmentReturn_1yr) / sum(MktAssets_net)) %>%
+#   select(fy, ppf.ir, ppfw.ir)
+# 
+# iret2 <- left_join(select(iretcalc, year, totretfy.ir), rename(ppdret, year=fy)) %>%
+#   gather(variable, value, -year)
+# 
+# qplot(year, value, data=filter(iret2, year>=1997), colour=variable, geom=c("point", "line"), 
+#       main="Median reported PPD return (ppf.ir) and synthetic estimate of public pension fund returns (totret.ir)") +
+#   geom_hline(y=0)
+
+```
+
+
+
+```{r eval=FALSE}
+# Get Robert Shiller data on returns and put in the data directory
+# http://www.econ.yale.edu/~shiller/data.htm
+# http://www.econ.yale.edu/~shiller/data/ie_data.xls  Irrational Exuberance book - monthly through June 2015
+# http://www.econ.yale.edu/~shiller/data/chapt26.xls  Market Volatility book - annual through 2012 and 2013 - this is the one we want
+# The version with _djb is my version with info to help me understand it. But get data from the original source.
+# Shiller's notes on an earlier set of data are here: http://www.econ.yale.edu/~shiller/data/chapt26.html
+# c26 <- read_excel("./Data/chapt26.xls", col_names = FALSE)
+# ncol(c26)
+# names(c26)
+
+
+```
+

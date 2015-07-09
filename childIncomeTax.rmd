@@ -1,0 +1,62 @@
+---
+
+---
+
+<!--- Note that this will not knit correctly unless directory names, etc. from main program are available.
+
+
+-->
+
+# Income tax base analysis
+## PIT - look at AGI, taxable income, then consider progressivity adjustments
+
+```{r}
+# set up the SOI data
+tmp <- readRDS(file="./Data/soiall.rds") %>% # data I created previously
+  filter(incgrp==0, stabbr=="US")
+count(tmp, vname, item, varcsv, varcsvdesc)
+count(tmp, vname, item)
+keepvars <- c("nret", "agi", "wages", "netcgll", "taxinc")
+soi <- tmp %>% filter(vname %in% keepvars) %>%
+  select(vname, year, value)
+soi %>% spread(vname, value)
+
+# Get older history for these variables, for US, based on "incm53" spreadsheets from SOI
+soi_old <- read_excel("./Data/soiUShistory.xlsx", sheet="soidat")
+glimpse(soi_old)
+# compare 2004, since I put it in the history file
+inner_join(soi, select(soi_old, vname, year, value_old=value))
+
+soi2 <- bind_rows(soi, filter(soi_old, year<2004) %>% select(vname, year, value))
+soi2 %>% spread(vname, value)
+
+```
+
+
+### How does federal taxable income compare to iit revenue collections?
+* This doesn't look awful. We might even be able to survive without a progressivity adjustment    
+
+```{r}
+# adjust soi for prices - here we use the cy price index as soi is on a cy (tax year)
+soi3 <- soi2 %>% rename(variable=vname) %>% mutate(rvalue=value * gdppi$value[match(2014, gdppi$year)] / gdppi$value[match(year, gdppi$year)])
+# first look at inc pch in isolation
+soi3 %>% group_by(variable) %>%
+  arrange(year) %>%
+  mutate(rpch=rvalue / lag(rvalue) * 100 - 100) %>% # this relies on faith that there are no missing years
+  qplot(year, rpch, data=., colour=variable, geom=c("point", "line"), main="% change in inflation-adjusted tax year soi values") + geom_hline(y=0)
+
+# now combine the files, aligning each tax year with the fiscal year in which it ends (fiscal year = tax year + 1)
+taxsoi <- bind_rows(mutate(tax, fyear=year), mutate(soi3, fyear=year+1))
+
+taxsoi %>% filter(variable %in% c("tottax", "iit", "agi", "taxinc"), fyear>=1996) %>%
+  group_by(variable) %>%
+  arrange(fyear) %>%
+  mutate(rpch=rvalue / lag(rvalue) * 100 - 100) %>% # this relies on faith that there are no missing years
+  qplot(fyear, rpch, data=., colour=variable, geom=c("point", "line"), main="% change in inflation-adjusted tax items") + geom_hline(y=0)
+
+
+```
+
+
+
+
